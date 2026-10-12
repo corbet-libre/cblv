@@ -6,8 +6,8 @@ use axum::{
     http::{StatusCode, header},
     routing::post,
 };
-use ohttp_lib::{
-    Error, Lane, REQUEST_MEDIA,
+use cblv::{
+    Error, PATH, REQUEST_MEDIA,
     client::{OhttpWire, Post, RawReply, Wire},
     codec,
     gateway::{self, Gateway, GatewayKey, ViaOhttp},
@@ -76,7 +76,6 @@ fn fixture(key_ids: &[(u8, u64)], gateway_clock: fn() -> u64, secret: Option<&[u
         keys,
         replay: store.clone(),
         mutating: Arc::new(|path| path == "/v1/mutate"),
-        anonymous: Arc::new(|path| path == "/v1/read"),
         relay_secret: secret.map(|s| Zeroizing::new(s.to_vec())),
         max_inner_response: 1 << 20,
         clock: gateway_clock,
@@ -159,10 +158,7 @@ fn plain(_: &mut Vec<u8>) {}
 async fn round_trip_reaches_the_handler_unchanged() {
     let f = fixture(&[(1, NOW + 10_000)], now, None);
     let (wire, seen) = wire(&f, None, plain);
-    let reply = wire
-        .exchange(Lane::Session, call("/v1/mutate", b"hello"))
-        .await
-        .unwrap();
+    let reply = wire.exchange(call("/v1/mutate", b"hello")).await.unwrap();
     assert_eq!((reply.status, reply.body.as_slice()), (201, &b"hello"[..]));
     assert_eq!(f.handled.load(Ordering::SeqCst), 1);
     // The relay sees no plaintext.
@@ -173,15 +169,13 @@ async fn round_trip_reaches_the_handler_unchanged() {
 async fn replayed_ciphertext_is_refused_and_not_dispatched() {
     let f = fixture(&[(1, NOW + 10_000)], now, None);
     let (wire, seen) = wire(&f, None, plain);
-    wire.exchange(Lane::Session, call("/v1/mutate", b"x"))
-        .await
-        .unwrap();
+    wire.exchange(call("/v1/mutate", b"x")).await.unwrap();
     let captured = seen.lock().unwrap()[0].clone();
     let again = f
         .app
         .clone()
         .oneshot(
-            axum::http::Request::post(Lane::Session.path())
+            axum::http::Request::post(PATH)
                 .header(header::CONTENT_TYPE, REQUEST_MEDIA)
                 .body(Body::from(captured))
                 .unwrap(),
@@ -197,15 +191,9 @@ async fn reads_skip_the_replay_store_and_a_broken_store_fails_closed() {
     let f = fixture(&[(1, NOW + 10_000)], now, None);
     let (wire, _) = wire(&f, None, plain);
     f.store.break_store();
-    assert!(
-        wire.exchange(Lane::Session, call("/v1/read", b""))
-            .await
-            .is_ok()
-    );
+    assert!(wire.exchange(call("/v1/read", b"")).await.is_ok());
     assert_eq!(
-        wire.exchange(Lane::Session, call("/v1/mutate", b""))
-            .await
-            .unwrap_err(),
+        wire.exchange(call("/v1/mutate", b"")).await.unwrap_err(),
         Error::Status(503)
     );
     assert_eq!(f.handled.load(Ordering::SeqCst), 0);
@@ -219,9 +207,7 @@ async fn tampered_ciphertext_never_reaches_the_handler() {
         body[last] ^= 1;
     });
     assert_eq!(
-        wire.exchange(Lane::Session, call("/v1/mutate", b"x"))
-            .await
-            .unwrap_err(),
+        wire.exchange(call("/v1/mutate", b"x")).await.unwrap_err(),
         Error::Status(400)
     );
     assert_eq!(f.handled.load(Ordering::SeqCst), 0);
@@ -232,9 +218,7 @@ async fn unknown_key_id_signals_key_mismatch() {
     let f = fixture(&[(1, NOW + 10_000)], now, None);
     let (wire, _) = wire(&f, None, |body| body[0] = 99);
     assert_eq!(
-        wire.exchange(Lane::Session, call("/v1/read", b""))
-            .await
-            .unwrap_err(),
+        wire.exchange(call("/v1/read", b"")).await.unwrap_err(),
         Error::KeyMismatch
     );
 }
@@ -251,15 +235,13 @@ async fn retired_gateway_key_is_refused_but_overlap_works() {
     old.set_keys(only_old);
     // Device clock is still NOW; its old key is within its published validity.
     assert_eq!(
-        old.exchange(Lane::Session, call("/v1/read", b""))
-            .await
-            .unwrap_err(),
+        old.exchange(call("/v1/read", b"")).await.unwrap_err(),
         Error::KeyMismatch
     );
 }
 
 impl Fixture {
-    fn keys_for(&self, id: u8) -> ohttp_lib::keys::PublishedKey {
+    fn keys_for(&self, id: u8) -> cblv::keys::PublishedKey {
         let key = GatewayKey::derive(id, &Zeroizing::new(vec![id; 32]), NOW + 1_000).unwrap();
         key.published(AUTHORITY, NOW - 500)
     }
@@ -271,35 +253,18 @@ async fn stale_published_key_and_unverified_state_give_no_key() {
     let (mut wire, _) = wire(&f, None, plain);
     wire.set_keys(VerifiedKeys::default());
     assert_eq!(
-        wire.exchange(Lane::Session, call("/v1/read", b""))
-            .await
-            .unwrap_err(),
+        wire.exchange(call("/v1/read", b"")).await.unwrap_err(),
         Error::NoKey
     );
 }
 
 #[tokio::test]
-async fn wrong_authority_skew_and_lane_rules() {
+async fn wrong_authority_and_skew() {
     let f = fixture(&[(1, NOW + 10_000)], now, None);
     let (wire, _) = wire(&f, None, plain);
     let mut wrong = call("/v1/read", b"");
     wrong.authority = b"other.test".to_vec();
-    assert_eq!(
-        wire.exchange(Lane::Session, wrong).await.unwrap_err(),
-        Error::Status(400)
-    );
-    // Mutating call on the anonymous lane is refused.
-    assert_eq!(
-        wire.exchange(Lane::Anonymous, call("/v1/mutate", b""))
-            .await
-            .unwrap_err(),
-        Error::Status(400)
-    );
-    assert!(
-        wire.exchange(Lane::Anonymous, call("/v1/read", b""))
-            .await
-            .is_ok()
-    );
+    assert_eq!(wire.exchange(wrong).await.unwrap_err(), Error::Status(400));
     // Gateway clock far ahead of the device: outside the window.
     fn ahead() -> u64 {
         NOW + 1_000
@@ -307,10 +272,7 @@ async fn wrong_authority_skew_and_lane_rules() {
     let skewed = fixture(&[(1, NOW + 10_000)], ahead, None);
     let (skew_wire, _) = wire_for(&skewed);
     assert_eq!(
-        skew_wire
-            .exchange(Lane::Session, call("/v1/read", b""))
-            .await
-            .unwrap_err(),
+        skew_wire.exchange(call("/v1/read", b"")).await.unwrap_err(),
         Error::Status(400)
     );
 }
@@ -324,18 +286,11 @@ async fn relay_secret_is_required() {
     let f = fixture(&[(1, NOW + 10_000)], now, Some(b"s3cret"));
     let (no_secret, _) = wire(&f, None, plain);
     assert_eq!(
-        no_secret
-            .exchange(Lane::Session, call("/v1/read", b""))
-            .await
-            .unwrap_err(),
+        no_secret.exchange(call("/v1/read", b"")).await.unwrap_err(),
         Error::Status(404)
     );
     let (with, _) = wire(&f, Some(b"s3cret"), plain);
-    assert!(
-        with.exchange(Lane::Session, call("/v1/read", b""))
-            .await
-            .is_ok()
-    );
+    assert!(with.exchange(call("/v1/read", b"")).await.is_ok());
 }
 
 #[tokio::test]

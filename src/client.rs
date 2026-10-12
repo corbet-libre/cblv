@@ -1,6 +1,6 @@
 //! Device side. Every member request to a server passes through one [`Wire`];
 //! streams keep their direct connection and never use this module.
-use crate::{Error, Lane, REQUEST_MEDIA, Result, codec, keys::VerifiedKeys};
+use crate::{Error, PATH, REQUEST_MEDIA, Result, codec, keys::VerifiedKeys};
 use std::future::Future;
 
 pub struct RawReply {
@@ -21,24 +21,19 @@ pub trait Post {
 
 /// The single request/response seam.
 pub trait Wire {
-    fn exchange(
-        &self,
-        lane: Lane,
-        request: codec::Request,
-    ) -> impl Future<Output = Result<codec::Response>>;
+    fn exchange(&self, request: codec::Request) -> impl Future<Output = Result<codec::Response>>;
 }
 
 pub struct OhttpWire<P> {
     post: P,
-    anonymous_url: String,
-    session_url: String,
+    url: String,
     service: String,
     keys: VerifiedKeys,
     clock: fn() -> u64,
 }
 
 impl<P: Post> OhttpWire<P> {
-    /// `relay` is the relay base URL; `service` the gateway authority whose
+    /// `relay` is the base URL of the proxied gateway host; `service` the gateway authority whose
     /// published key must be used.
     pub fn new(
         post: P,
@@ -50,8 +45,7 @@ impl<P: Post> OhttpWire<P> {
         let base = relay.trim_end_matches('/');
         Self {
             post,
-            anonymous_url: format!("{base}{}", Lane::Anonymous.path()),
-            session_url: format!("{base}{}", Lane::Session.path()),
+            url: format!("{base}{PATH}"),
             service: service.to_owned(),
             keys,
             clock,
@@ -65,7 +59,7 @@ impl<P: Post> OhttpWire<P> {
 }
 
 impl<P: Post> Wire for OhttpWire<P> {
-    async fn exchange(&self, lane: Lane, request: codec::Request) -> Result<codec::Response> {
+    async fn exchange(&self, request: codec::Request) -> Result<codec::Response> {
         let now = (self.clock)();
         let key = self.keys.current(&self.service, now).ok_or(Error::NoKey)?;
         let mut nonce = [0u8; 16];
@@ -74,11 +68,7 @@ impl<P: Post> Wire for OhttpWire<P> {
         let client =
             ohttp::ClientRequest::from_encoded_config(&key.config).map_err(|_| Error::KeyConfig)?;
         let (outer, response) = client.encapsulate(&inner).map_err(|_| Error::Encapsulate)?;
-        let url = match lane {
-            Lane::Anonymous => &self.anonymous_url,
-            Lane::Session => &self.session_url,
-        };
-        let reply = self.post.post(url, REQUEST_MEDIA, outer).await?;
+        let reply = self.post.post(&self.url, REQUEST_MEDIA, outer).await?;
         match reply.status {
             200 => {}
             401 => return Err(Error::KeyMismatch),

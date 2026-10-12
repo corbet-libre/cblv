@@ -1,5 +1,5 @@
 [package]
-name = "ohttp-lib" # placeholder, rename is mechanical
+name = "cblv" # placeholder, rename is mechanical
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.86"
@@ -34,7 +34,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
-ohttp-lib = { path = ".", features = ["client", "gateway", "test-store"] }
+cblv = { path = ".", features = ["client", "gateway", "test-store"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 tower = { version = "0.5", features = ["util"] }

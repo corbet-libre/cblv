@@ -1,4 +1,4 @@
-//! Oblivious HTTP (RFC 9458) for every request/response call from a member's
+//! cblv: Oblivious HTTP (RFC 9458) for every request/response call from a member's
 //! device to our servers. The relay sees who sends but only ciphertext; the
 //! gateway sees the request but never the sender's address.
 //!
@@ -25,25 +25,9 @@ pub const WINDOW_SECONDS: u64 = 120;
 /// How long a retired gateway key still decrypts after its published end.
 pub const RETIRE_SKEW_SECONDS: u64 = 3600;
 
-/// Separate relay budgets: pre-session ceremony calls and session calls.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Lane {
-    Anonymous,
-    Session,
-}
-impl Lane {
-    pub const fn path(self) -> &'static str {
-        match self {
-            Self::Anonymous => "/ohttp/anonymous",
-            Self::Session => "/ohttp/session",
-        }
-    }
-    pub fn from_path(path: &str) -> Option<Self> {
-        [Self::Anonymous, Self::Session]
-            .into_iter()
-            .find(|lane| lane.path() == path)
-    }
-}
+/// The single gateway path. Cloudflare's free plan allows one rate-limit rule,
+/// so there are no separate lanes: one per-IP rule covers this path.
+pub const PATH: &str = "/ohttp";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

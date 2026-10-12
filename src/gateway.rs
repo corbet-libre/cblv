@@ -2,9 +2,9 @@
 //! inner request to the existing handlers unchanged, and encapsulates the
 //! response. Handlers never see the sender's address: the inner request has no
 //! connection info and carries the [`ViaOhttp`] marker, which per-source
-//! limiters must treat as "limited at the relay".
+//! limiters must treat as "limited at the proxy".
 use crate::{
-    Lane, REQUEST_MEDIA, RESPONSE_MEDIA, RETIRE_SKEW_SECONDS, WINDOW_SECONDS, codec,
+    PATH, REQUEST_MEDIA, RESPONSE_MEDIA, RETIRE_SKEW_SECONDS, WINDOW_SECONDS, codec,
     keys::PublishedKey,
     replay::{self, Insert, ReplayStore},
 };
@@ -28,7 +28,7 @@ const RELAY_AUTH: &str = "x-relay-auth";
 
 /// Request extension: this call arrived through OHTTP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ViaOhttp(pub Lane);
+pub struct ViaOhttp;
 
 /// One gateway key. The secret input keying material lives in the secret store
 /// (not in code or the feed); the public half is published in the trust feed.
@@ -85,9 +85,7 @@ pub struct Gateway {
     pub replay: Arc<dyn ReplayStore>,
     /// State-changing inner paths: only these touch the replay store.
     pub mutating: Arc<dyn Fn(&str) -> bool + Send + Sync>,
-    /// Pre-session inner paths: the only ones the anonymous lane may carry.
-    pub anonymous: Arc<dyn Fn(&str) -> bool + Send + Sync>,
-    /// Shared secret the relay sends; keeps relay limits from being bypassed.
+    /// Optional shared secret a front proxy adds (header `x-relay-auth`).
     pub relay_secret: Option<Zeroizing<Vec<u8>>>,
     pub max_inner_response: usize,
     pub clock: fn() -> u64,
@@ -145,9 +143,10 @@ where
         let inner = std::mem::replace(&mut self.inner, clone);
         let gateway = self.gateway.clone();
         Box::pin(async move {
-            match Lane::from_path(request.uri().path()) {
-                Some(lane) => Ok(handle(&gateway, lane, request, inner).await),
-                None => inner.oneshot(request).await,
+            if request.uri().path() == PATH {
+                Ok(handle(&gateway, request, inner).await)
+            } else {
+                inner.oneshot(request).await
             }
         })
     }
@@ -176,12 +175,7 @@ fn equal(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-async fn handle<S>(
-    gateway: &Gateway,
-    lane: Lane,
-    request: Request<Body>,
-    inner: S,
-) -> Response<Body>
+async fn handle<S>(gateway: &Gateway, request: Request<Body>, inner: S) -> Response<Body>
 where
     S: Service<Request<Body>, Response = Response<Body>, Error = Infallible>,
 {
@@ -226,7 +220,6 @@ where
         || !path.starts_with('/')
         || now.abs_diff(decoded.timestamp) > WINDOW_SECONDS
         || decoded.timestamp < gateway.replay.started_at()
-        || (lane == Lane::Anonymous && !(gateway.anonymous)(path))
     {
         return bad();
     }
@@ -239,7 +232,7 @@ where
             Err(_) => return outer(StatusCode::SERVICE_UNAVAILABLE),
         }
     }
-    let Some(dispatch) = build(&decoded.request, path, lane) else {
+    let Some(dispatch) = build(inner_request, path) else {
         return bad();
     };
     let response = match inner.oneshot(dispatch).await {
@@ -286,7 +279,7 @@ fn skipped(name: &str) -> bool {
     )
 }
 
-fn build(request: &codec::Request, path: &str, lane: Lane) -> Option<Request<Body>> {
+fn build(request: &codec::Request, path: &str) -> Option<Request<Body>> {
     let method = Method::from_bytes(&request.method).ok()?;
     let mut built = Request::builder().method(method).uri(path);
     for (name, value) in &request.headers {
@@ -298,7 +291,12 @@ fn build(request: &codec::Request, path: &str, lane: Lane) -> Option<Request<Bod
             HeaderValue::from_bytes(value).ok()?,
         );
     }
+    // The signed authority becomes the Host the handlers validate.
+    built = built.header(
+        header::HOST,
+        HeaderValue::from_bytes(&request.authority).ok()?,
+    );
     let mut built = built.body(Body::from(request.body.clone())).ok()?;
-    built.extensions_mut().insert(ViaOhttp(lane));
+    built.extensions_mut().insert(ViaOhttp);
     Some(built)
 }
