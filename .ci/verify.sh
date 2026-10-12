@@ -9,4 +9,4 @@ cargo fmt --check
 cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo test --locked --all-features
 # Browser build of the device side: pure-Rust HPKE, getrandom's browser backend.
-RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo check --locked --no-default-features --features client --target wasm32-unknown-unknown --lib
+RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo check --locked --no-default-features --features client,browser --target wasm32-unknown-unknown --lib

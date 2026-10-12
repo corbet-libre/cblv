@@ -12,6 +12,7 @@ default = []
 # Device side. Builds for wasm32 (pure-Rust HPKE backend).
 client = ["ohttp/client", "dep:getrandom"]
 # Server side: tower layer for axum. Native only.
+browser = ["client", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys"]
 gateway = ["ohttp/server", "dep:axum", "dep:tower", "dep:zeroize", "dep:tokio"]
 # In-memory replay store for tests only; never production (no process-local state).
 test-store = []
@@ -29,6 +30,10 @@ zeroize = { version = "1", optional = true }
 
 # wasm32 randomness needs RUSTFLAGS --cfg getrandom_backend="wasm_js", as in cmsg.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Window", "Headers", "Request", "RequestInit", "RequestMode", "RequestRedirect", "RequestCredentials", "RequestCache", "ReferrerPolicy", "Response"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 # ohttp's HPKE backend (rand 0.10) pulls getrandom 0.4; enable its browser backend too.
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }

@@ -13,6 +13,8 @@ pub mod codec;
 pub mod keys;
 pub mod replay;
 
+#[cfg(all(feature = "browser", target_arch = "wasm32"))]
+pub mod browser;
 #[cfg(feature = "client")]
 pub mod client;
 #[cfg(feature = "gateway")]
