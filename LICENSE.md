@@ -2,7 +2,7 @@
 
 Copyright 2026 Julian Y. Richard Corbet.
 
-czkp is licensed under **LGPL-3.0-only WITH LGPL-3.0-linking-exception**.
+cblv is licensed under **LGPL-3.0-only WITH LGPL-3.0-linking-exception**.
 This covers the library's Rust implementation, tests and documentation. The complete
 [LGPL version 3](LICENSES/LGPL-3.0-only.txt) incorporates
 [GPL version 3](LICENSES/GPL-3.0-only.txt); the
