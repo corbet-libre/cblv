@@ -11,7 +11,7 @@ use cblv::{
     client::{OhttpWire, Post, RawReply, Wire},
     codec,
     gateway::{self, Gateway, GatewayKey, ViaOhttp},
-    keys::VerifiedKeys,
+    keys::{Directory, PublishedKey, Snapshot},
     replay::MemoryStore,
 };
 use std::sync::{
@@ -23,6 +23,13 @@ use zeroize::Zeroizing;
 
 const AUTHORITY: &str = "api.test";
 const NOW: u64 = 1_000_000;
+
+fn directory(keys: Vec<PublishedKey>) -> Directory {
+    Directory {
+        relay: "https://relay.test".into(),
+        keys,
+    }
+}
 fn now() -> u64 {
     NOW
 }
@@ -31,7 +38,7 @@ struct Fixture {
     app: Router,
     handled: Arc<AtomicUsize>,
     store: Arc<MemoryStore>,
-    keys: VerifiedKeys,
+    keys: Snapshot,
 }
 
 fn fixture(key_ids: &[(u8, u64)], gateway_clock: fn() -> u64, secret: Option<&[u8]>) -> Fixture {
@@ -84,7 +91,7 @@ fn fixture(key_ids: &[(u8, u64)], gateway_clock: fn() -> u64, secret: Option<&[u
         app: gateway::mount(echo, gw),
         handled,
         store,
-        keys: VerifiedKeys::from_verified_feed(published).unwrap(),
+        keys: directory(published).verify().unwrap(),
     }
 }
 
@@ -128,7 +135,11 @@ impl Post for Loop {
     }
 }
 
-fn wire(f: &Fixture, secret: Option<&[u8]>, tamper: fn(&mut Vec<u8>)) -> (OhttpWire<Loop>, Seen) {
+fn wire(
+    f: &Fixture,
+    secret: Option<&[u8]>,
+    tamper: fn(&mut Vec<u8>),
+) -> (OhttpWire<Loop, Snapshot>, Seen) {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let post = Loop {
         app: f.app.clone(),
@@ -136,10 +147,7 @@ fn wire(f: &Fixture, secret: Option<&[u8]>, tamper: fn(&mut Vec<u8>)) -> (OhttpW
         tamper,
         seen: seen.clone(),
     };
-    (
-        OhttpWire::new(post, "https://relay.test", AUTHORITY, f.keys.clone(), now),
-        seen,
-    )
+    (OhttpWire::new(post, AUTHORITY, f.keys.clone(), now), seen)
 }
 
 fn call(path: &str, body: &[u8]) -> codec::Request {
@@ -230,7 +238,7 @@ async fn retired_gateway_key_is_refused_but_overlap_works() {
     }
     // Key 1 ended at NOW+1000 (+1h skew has passed at NOW+5000); key 2 is live.
     let f = fixture(&[(1, NOW + 1_000), (2, NOW + 100_000)], later, None);
-    let only_old = VerifiedKeys::from_verified_feed(vec![f.keys_for(1)]).unwrap();
+    let only_old = directory(vec![f.keys_for(1)]).verify().unwrap();
     let mut old = wire(&f, None, plain).0;
     old.set_keys(only_old);
     // Device clock is still NOW; its old key is within its published validity.
@@ -241,7 +249,7 @@ async fn retired_gateway_key_is_refused_but_overlap_works() {
 }
 
 impl Fixture {
-    fn keys_for(&self, id: u8) -> cblv::keys::PublishedKey {
+    fn keys_for(&self, id: u8) -> PublishedKey {
         let key = GatewayKey::derive(id, &Zeroizing::new(vec![id; 32]), NOW + 1_000).unwrap();
         key.published(AUTHORITY, NOW - 500)
     }
@@ -251,7 +259,7 @@ impl Fixture {
 async fn stale_published_key_and_unverified_state_give_no_key() {
     let f = fixture(&[(1, NOW + 10_000)], now, None);
     let (mut wire, _) = wire(&f, None, plain);
-    wire.set_keys(VerifiedKeys::default());
+    wire.set_keys(directory(vec![]).verify().unwrap());
     assert_eq!(
         wire.exchange(call("/v1/read", b"")).await.unwrap_err(),
         Error::NoKey
@@ -277,7 +285,7 @@ async fn wrong_authority_and_skew() {
     );
 }
 
-fn wire_for(f: &Fixture) -> (OhttpWire<Loop>, Seen) {
+fn wire_for(f: &Fixture) -> (OhttpWire<Loop, Snapshot>, Seen) {
     wire(f, None, plain)
 }
 

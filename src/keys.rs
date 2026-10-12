@@ -25,6 +25,66 @@ pub struct PublishedKey {
     pub not_after: u64,
 }
 
+/// What the signed trust manifest carries: the relay in front of the gateways
+/// and the current key entries (several during a rotation overlap).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Directory {
+    /// Base URL of the proxied gateway host that forwards ciphertext.
+    pub relay: String,
+    pub keys: Vec<PublishedKey>,
+}
+
+impl Directory {
+    /// Check a directory taken from a signature-verified manifest.
+    pub fn verify(self) -> Result<Snapshot> {
+        let relay = self.relay.as_str();
+        if !relay.starts_with("https://")
+            || relay.len() > 253
+            || relay.len() <= "https://".len()
+            || relay.bytes().any(|byte| {
+                byte.is_ascii_whitespace()
+                    || byte.is_ascii_control()
+                    || matches!(byte, b'?' | b'#' | b'@')
+            })
+        {
+            return Err(Error::KeyConfig);
+        }
+        Ok(Snapshot {
+            relay: self.relay,
+            keys: VerifiedKeys::from_verified_feed(self.keys)?,
+        })
+    }
+}
+
+/// A verified directory: where to send and which keys may be used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    relay: String,
+    keys: VerifiedKeys,
+}
+
+/// Source of the current verified keys. Production sources follow the signed
+/// trust feed; a fixed [`Snapshot`] serves tests.
+pub trait KeySource {
+    /// Relay base URL and the newest key valid now for exactly this service.
+    fn current(&self, service: &str, now: u64) -> Option<(String, PublishedKey)>;
+}
+
+impl KeySource for Snapshot {
+    fn current(&self, service: &str, now: u64) -> Option<(String, PublishedKey)> {
+        self.keys
+            .current(service, now)
+            .map(|key| (self.relay.clone(), key.clone()))
+    }
+}
+
+impl<T: KeySource + ?Sized> KeySource for std::sync::Arc<T> {
+    fn current(&self, service: &str, now: u64) -> Option<(String, PublishedKey)> {
+        (**self).current(service, now)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VerifiedKeys(Vec<PublishedKey>);
 
@@ -103,5 +163,30 @@ mod tests {
         assert!(VerifiedKeys::from_verified_feed(vec![wrong_id]).is_err());
         assert!(VerifiedKeys::from_verified_feed(vec![entry(1, 5, 5)]).is_err());
         assert!(VerifiedKeys::from_verified_feed(vec![entry(1, 0, 9), entry(1, 5, 20)]).is_err());
+    }
+
+    #[test]
+    fn directory_refuses_unsafe_relays_and_accepts_overlap() {
+        for relay in [
+            "http://r.example",
+            "https://",
+            "https://u@r.example",
+            "https://r.example/?x",
+            "https://r.example/#f",
+            "https://r .example",
+        ] {
+            let directory = Directory {
+                relay: relay.into(),
+                keys: vec![entry(1, 0, 10)],
+            };
+            assert!(directory.verify().is_err(), "{relay}");
+        }
+        let overlap = Directory {
+            relay: "https://r.example".into(),
+            keys: vec![entry(1, 0, 100), entry(2, 50, 200)],
+        };
+        let snapshot = overlap.verify().unwrap();
+        assert_eq!(snapshot.current("a", 60).unwrap().1.key_id, 2);
+        assert_eq!(snapshot.current("a", 10).unwrap().0, "https://r.example");
     }
 }

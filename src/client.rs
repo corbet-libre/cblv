@@ -1,6 +1,6 @@
 //! Device side. Every member request to a server passes through one [`Wire`];
 //! streams keep their direct connection and never use this module.
-use crate::{Error, PATH, REQUEST_MEDIA, Result, codec, keys::VerifiedKeys};
+use crate::{Error, PATH, REQUEST_MEDIA, Result, codec, keys::KeySource};
 use std::future::Future;
 
 pub struct RawReply {
@@ -24,51 +24,49 @@ pub trait Wire {
     fn exchange(&self, request: codec::Request) -> impl Future<Output = Result<codec::Response>>;
 }
 
-pub struct OhttpWire<P> {
+pub struct OhttpWire<P, K> {
     post: P,
-    url: String,
     service: String,
-    keys: VerifiedKeys,
+    keys: K,
     clock: fn() -> u64,
 }
 
-impl<P: Post> OhttpWire<P> {
-    /// `relay` is the base URL of the proxied gateway host; `service` the gateway authority whose
-    /// published key must be used.
-    pub fn new(
-        post: P,
-        relay: &str,
-        service: &str,
-        keys: VerifiedKeys,
-        clock: fn() -> u64,
-    ) -> Self {
-        let base = relay.trim_end_matches('/');
+impl<P: Post, K: KeySource> OhttpWire<P, K> {
+    /// `service` is the gateway authority whose published key must be used;
+    /// `keys` yields the verified relay and key from the signed trust feed.
+    pub fn new(post: P, service: &str, keys: K, clock: fn() -> u64) -> Self {
         Self {
             post,
-            url: format!("{base}{PATH}"),
             service: service.to_owned(),
             keys,
             clock,
         }
     }
 
-    /// Replace the keys after a verified feed refresh (rotation).
-    pub fn set_keys(&mut self, keys: VerifiedKeys) {
+    /// Replace the key source (tests, rotation of a fixed source).
+    pub fn set_keys(&mut self, keys: K) {
         self.keys = keys;
     }
 }
 
-impl<P: Post> Wire for OhttpWire<P> {
+impl<P: Post, K: KeySource> Wire for OhttpWire<P, K> {
     async fn exchange(&self, request: codec::Request) -> Result<codec::Response> {
         let now = (self.clock)();
-        let key = self.keys.current(&self.service, now).ok_or(Error::NoKey)?;
+        let (relay, key) = self.keys.current(&self.service, now).ok_or(Error::NoKey)?;
         let mut nonce = [0u8; 16];
         getrandom::fill(&mut nonce).map_err(|_| Error::Random)?;
         let inner = codec::encode_request(&request, &nonce, now)?;
         let client =
             ohttp::ClientRequest::from_encoded_config(&key.config).map_err(|_| Error::KeyConfig)?;
         let (outer, response) = client.encapsulate(&inner).map_err(|_| Error::Encapsulate)?;
-        let reply = self.post.post(&self.url, REQUEST_MEDIA, outer).await?;
+        let reply = self
+            .post
+            .post(
+                &format!("{}{PATH}", relay.trim_end_matches('/')),
+                REQUEST_MEDIA,
+                outer,
+            )
+            .await?;
         match reply.status {
             200 => {}
             401 => return Err(Error::KeyMismatch),
