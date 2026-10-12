@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.86"
 description = "Oblivious HTTP (RFC 9458) client and gateway layer for the member-to-server calls"
-license-file = "LICENSE.md"
+license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
 publish = false
 
 [features]
