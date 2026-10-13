@@ -79,8 +79,15 @@ impl GatewayKey {
     }
 }
 
+/// Decides whether the gateway serves an inner request's authority (the Host
+/// the sealed request names). Anything it refuses gets the same uniform
+/// refusal as a malformed request, so unknown and ended hosts look alike.
+pub trait Authorities: Send + Sync {
+    fn accepts<'a>(&'a self, authority: &'a [u8]) -> crate::replay::BoxFuture<'a, bool>;
+}
+
 pub struct Gateway {
-    pub authority: String,
+    pub authorities: Arc<dyn Authorities>,
     pub keys: Vec<GatewayKey>,
     pub replay: Arc<dyn ReplayStore>,
     /// State-changing inner paths: only these touch the replay store.
@@ -216,10 +223,10 @@ where
     let Ok(path) = std::str::from_utf8(&inner_request.path) else {
         return bad();
     };
-    if inner_request.authority != gateway.authority.as_bytes()
-        || !path.starts_with('/')
+    if !path.starts_with('/')
         || now.abs_diff(decoded.timestamp) > WINDOW_SECONDS
         || decoded.timestamp < gateway.replay.started_at()
+        || !gateway.authorities.accepts(&inner_request.authority).await
     {
         return bad();
     }

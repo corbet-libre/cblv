@@ -79,7 +79,7 @@ fn fixture(key_ids: &[(u8, u64)], gateway_clock: fn() -> u64, secret: Option<&[u
         keys.push(key);
     }
     let gw = Arc::new(Gateway {
-        authority: AUTHORITY.into(),
+        authorities: Arc::new(Only(AUTHORITY)),
         keys,
         replay: store.clone(),
         mutating: Arc::new(|path| path == "/v1/mutate"),
@@ -148,6 +148,14 @@ fn wire(
         seen: seen.clone(),
     };
     (OhttpWire::new(post, AUTHORITY, f.keys.clone(), now), seen)
+}
+
+/// A fixed set of accepted authorities, standing in for a registry lookup.
+struct Only(&'static str);
+impl gateway::Authorities for Only {
+    fn accepts<'a>(&'a self, authority: &'a [u8]) -> cblv::replay::BoxFuture<'a, bool> {
+        Box::pin(async move { authority == self.0.as_bytes() })
+    }
 }
 
 fn call(path: &str, body: &[u8]) -> codec::Request {
