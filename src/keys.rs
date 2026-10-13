@@ -121,6 +121,66 @@ impl VerifiedKeys {
     }
 }
 
+/// The directory last taken from the verified trust feed, with the feed
+/// publication sequence it came from. Only a strictly newer publication can
+/// replace it, so an older signed feed never brings back retired keys.
+#[derive(Debug, Default)]
+pub struct FeedKeys {
+    state: std::sync::RwLock<Option<(u64, Option<Snapshot>)>>,
+}
+
+impl FeedKeys {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the entry of a feed publication that already passed the Beacon
+    /// verification. `revision` is the publication sequence, `directory` the
+    /// `ohttp` entry of its manifest (`None` when the publication carries none).
+    /// A sequence that is not strictly greater than the installed one is refused.
+    pub fn install(&self, revision: u64, directory: Option<Directory>) -> Result<()> {
+        let snapshot = directory.map(Directory::verify).transpose()?;
+        let mut state = self.state.write().map_err(|_| Error::KeyConfig)?;
+        if state.as_ref().is_some_and(|(seen, _)| revision <= *seen) {
+            return Err(Error::KeyConfig);
+        }
+        *state = Some((revision, snapshot));
+        Ok(())
+    }
+
+    /// Whether any verified publication has been installed yet.
+    pub fn is_installed(&self) -> bool {
+        self.state.read().is_ok_and(|state| state.is_some())
+    }
+}
+
+impl KeySource for FeedKeys {
+    fn current(&self, service: &str, now: u64) -> Option<(String, PublishedKey)> {
+        let state = self.state.read().ok()?;
+        state.as_ref()?.1.as_ref()?.current(service, now)
+    }
+}
+
+/// Keys from the verified feed once it has been seen; the embedding-configured
+/// source only before that. The two are never merged: after the first verified
+/// publication the configured keys have no say, even when the feed carries no
+/// usable key (the client then fails closed).
+#[derive(Debug)]
+pub struct Preferred<'a, C> {
+    pub feed: &'a FeedKeys,
+    pub configured: C,
+}
+
+impl<C: KeySource> KeySource for Preferred<'_, C> {
+    fn current(&self, service: &str, now: u64) -> Option<(String, PublishedKey)> {
+        if self.feed.is_installed() {
+            self.feed.current(service, now)
+        } else {
+            self.configured.current(service, now)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +248,44 @@ mod tests {
         let snapshot = overlap.verify().unwrap();
         assert_eq!(snapshot.current("a", 60).unwrap().1.key_id, 2);
         assert_eq!(snapshot.current("a", 10).unwrap().0, "https://r.example");
+    }
+
+    #[test]
+    fn feed_keys_reject_older_publications_and_replace_configured_keys() {
+        let dir = |id: u8, from: u64, to: u64| Directory {
+            relay: "https://r.example".into(),
+            keys: vec![entry(id, from, to)],
+        };
+        let configured = dir(9, 0, 1000).verify().unwrap();
+        let feed = FeedKeys::new();
+        let source = Preferred {
+            feed: &feed,
+            configured,
+        };
+        // Before any verified publication the configured keys serve.
+        assert_eq!(source.current("a", 5).unwrap().1.key_id, 9);
+        feed.install(3, Some(dir(1, 0, 100))).unwrap();
+        // The feed replaces the configured keys, it never merges with them.
+        assert_eq!(source.current("a", 5).unwrap().1.key_id, 1);
+        // Older or equal publications cannot bring back older keys.
+        assert!(feed.install(2, Some(dir(9, 0, 1000))).is_err());
+        assert!(feed.install(3, Some(dir(9, 0, 1000))).is_err());
+        assert_eq!(source.current("a", 5).unwrap().1.key_id, 1);
+        // A newer rotation with overlap switches to the newest valid key.
+        let overlap = Directory {
+            relay: "https://r.example".into(),
+            keys: vec![entry(1, 0, 100), entry(2, 50, 200)],
+        };
+        feed.install(4, Some(overlap)).unwrap();
+        assert_eq!(source.current("a", 40).unwrap().1.key_id, 1);
+        assert_eq!(source.current("a", 60).unwrap().1.key_id, 2);
+        // Outside every window nothing is used, and the configured key stays out.
+        assert!(source.current("a", 200).is_none());
+        // A newer publication without the entry fails closed too.
+        feed.install(5, None).unwrap();
+        assert!(source.current("a", 60).is_none());
+        // An invalid entry never installs and leaves the previous state alone.
+        assert!(feed.install(6, Some(dir(1, 10, 10))).is_err());
+        assert!(source.current("a", 60).is_none());
     }
 }
