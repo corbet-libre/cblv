@@ -139,7 +139,12 @@ impl FeedKeys {
     /// `ohttp` entry of its manifest (`None` when the publication carries none).
     /// A sequence that is not strictly greater than the installed one is refused.
     pub fn install(&self, revision: u64, directory: Option<Directory>) -> Result<()> {
-        let snapshot = directory.map(Directory::verify).transpose()?;
+        self.install_snapshot(revision, directory.map(Directory::verify).transpose()?)
+    }
+
+    /// As [`FeedKeys::install`] for an entry that is already a verified
+    /// [`Snapshot`] (the form a verified Charter exposes).
+    pub fn install_snapshot(&self, revision: u64, snapshot: Option<Snapshot>) -> Result<()> {
         let mut state = self.state.write().map_err(|_| Error::KeyConfig)?;
         if state.as_ref().is_some_and(|(seen, _)| revision <= *seen) {
             return Err(Error::KeyConfig);
