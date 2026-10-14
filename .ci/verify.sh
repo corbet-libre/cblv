@@ -5,6 +5,7 @@ set -euo pipefail
 exec 2>&1
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
+bash .ci/update-our-crates.sh
 cargo fmt --check
 cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo test --locked --all-features
