@@ -21,8 +21,8 @@ jobs:
       - name: Fetch the exact commit and run the declared checks
         env:
           CCID_FORGE_TOKEN: ${{ github.token }}
-          CCID_REVISION: 75926b0e3612e3ee730b934204b178bdb3ae00be
-          CCID_TOOL_SHA256: adb856a8ea9405048ccf1d7c3d78cbdfce46aab03b7578cf13b99edcf67e0db6
+          CCID_REVISION: 2db9dddd5e43d48b6cdbb2728818957db65acf5e
+          CCID_TOOL_SHA256: f5a672c714ca91a87e230713086379f06ad6df6d0ccd9112ee5fbf0cd44f95e7
         run: |
           set -eu
           # A runner may name CCID_SOURCE_ROOT: the source then lives in a stable directory per repository, job and slot instead of the per-task directory, so absolute source
@@ -80,9 +80,10 @@ jobs:
           # Git LFS: a repository that tracks files with LFS gets the real content, not the pointer files (the LFS transfer authenticates with Basic).
           GIT_LFS_SKIP_SMUDGE=1 git checkout --quiet --force --detach FETCH_HEAD
           if git show FETCH_HEAD:.gitattributes 2>/dev/null | grep -q 'filter=lfs'; then
-            # The LFS endpoint wants HTTP Basic (the "token" scheme that git itself accepts is refused with 401): user and token, whatever the user name.
-            lfs_auth=$(printf 'x-access-token:%s' "$CCID_FORGE_TOKEN" | base64 -w0)
-            git -c "http.extraHeader=Authorization: Basic $lfs_auth" lfs pull origin
+            # The LFS endpoint wants HTTP Basic (the "token" scheme git itself accepts is refused with 401), and its batch answer carries a credential for the object downloads: a
+            # credential helper supplies Basic exactly once (a fixed extra header would be sent twice and the forge answers 400). `lfs install --local` makes `lfs pull` check the files out.
+            git lfs install --local --skip-smudge
+            git -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$CCID_FORGE_TOKEN"; }; f' lfs pull origin
           fi
           git clean --quiet -ffdx
           : "${CCID_TOOL_ROOT:?the runner must provide CCID_TOOL_ROOT}"
