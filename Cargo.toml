@@ -22,21 +22,20 @@ bhttp = "0.8"
 ohttp = { version = "0.8", default-features = false, features = ["rust-hpke"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
-getrandom = { version = "0.3", optional = true }
+getrandom = { version = "0.4", optional = true }
 axum = { version = "0.8", optional = true, default-features = false }
 tower = { version = "0.5", optional = true, features = ["util"] }
 tokio = { version = "1", optional = true, features = ["sync"] }
 zeroize = { version = "1", optional = true }
 
-# wasm32 randomness needs RUSTFLAGS --cfg getrandom_backend="wasm_js", as in cmsg.
+# wasm32 randomness: getrandom 0.4 selects its browser backend with the wasm_js feature
+# (ohttp's HPKE backend, rand 0.10, uses the same getrandom 0.4).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", optional = true, features = ["Window", "Headers", "Request", "RequestInit", "RequestMode", "RequestRedirect", "RequestCredentials", "RequestCache", "ReferrerPolicy", "Response"] }
-getrandom = { version = "0.3", features = ["wasm_js"] }
-# ohttp's HPKE backend (rand 0.10) pulls getrandom 0.4; enable its browser backend too.
-getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 cblv = { path = ".", features = ["client", "gateway", "test-store"] }
