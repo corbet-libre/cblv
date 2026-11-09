@@ -30,7 +30,7 @@
 #   TOOLCHAIN_LOCK_TIMEOUT   flock wait seconds (default 2700, mirrors CI_TIMEOUT)
 #   TOOLCHAIN_WANT_NIGHTLY   1/0 (default 1)
 #   TOOLCHAIN_WASM_TARGETS   space-separated "toolchain:target" pairs (default empty)
-#   CARGO_HOME, shared_cargo_home (as today), PATH with proto/rustup shims.
+#   CARGO_HOME (the runner's shared home, never a private one), PATH with proto/rustup shims.
 # Provides: toolchain_ensure (returns holding SHARED on fd 8),
 #           toolchain_release, toolchain_ready, repo_install_exact.
 # NOTE: no test doubles in this file. Tests stub rustup/proto/cargo on PATH.
@@ -45,7 +45,7 @@ _TOOLCHAIN_MAX_ROUNDS="${_TOOLCHAIN_MAX_ROUNDS:-3}"
 TOOLCHAIN_WANT_NIGHTLY="${TOOLCHAIN_WANT_NIGHTLY:-1}"
 TOOLCHAIN_WASM_TARGETS="${TOOLCHAIN_WASM_TARGETS:-}"
 
-_tc_rustup() { "$CARGO_HOME/bin/rustup" "$@"; }
+_tc_rustup() { rustup "$@"; }
 
 # --- readiness probes (read-only; safe under shared) ---
 tc_stable_ready() {
@@ -83,18 +83,6 @@ tc_target_ready() { # <toolchain> <target>
   return 0
 }
 
-# Registry link state is "ready" unless a linkable source exists and the link
-# is missing (that creation requires exclusive).
-tc_registry_ready() {
-  if [[ -e $CARGO_HOME/registry ]]; then
-    return 0
-  fi
-  if [[ -n ${shared_cargo_home:-} && -d $shared_cargo_home/registry ]]; then
-    return 1
-  fi
-  return 0
-}
-
 toolchain_ready() {
   tc_stable_ready || return 1
   if [[ $TOOLCHAIN_WANT_NIGHTLY == 1 ]]; then
@@ -106,7 +94,6 @@ toolchain_ready() {
     tgt=${pair#*:}
     tc_target_ready "$tc" "$tgt" || return 1
   done
-  tc_registry_ready || return 1
   return 0
 }
 
@@ -116,9 +103,6 @@ toolchain_ready() {
 toolchain_install() {
   local stable_comps
   mkdir -p "$CARGO_HOME" || return 1
-  if [[ ! -e $CARGO_HOME/registry && -n ${shared_cargo_home:-} && -d $shared_cargo_home/registry ]]; then
-    ln -s "$shared_cargo_home/registry" "$CARGO_HOME/registry" || return 1
-  fi
   # Repeated `proto install rust stable` can replace an installed toolchain.
   # Reuse a working provisioned stable compiler; explicit upgrades are separate.
   # Component adds run UNCONDITIONALLY after (not in an else): a fresh proto
