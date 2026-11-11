@@ -1,6 +1,6 @@
 schema = 1
 project = "cblv"
-repository = "https://git.corbet.ch/corbet-foss/cblv.git"
+repository = "https://git.corbet.ch/corbet-libre/cblv.git"
 
 [checks.verify]
 cache = false
