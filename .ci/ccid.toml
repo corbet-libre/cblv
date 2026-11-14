@@ -3,7 +3,6 @@ project = "cblv"
 repository = "https://git.corbet.ch/corbet-libre/cblv.git"
 
 [checks.verify]
-cache = false
 kind = "commands"
 commands = [
   ["cargo", "fmt", "--all", "--check"],
