@@ -2,7 +2,7 @@
   "schema": 1,
   "generator": "ccid render v1",
   "tool_revision": "",
-  "manifest_sha256": "d6742051bbb3da81aae4791e4edbec4abb3a100e9aa3cebba3bc1ce532bfda01",
+  "manifest_sha256": "118fdbb466fc0c2d9c7a6c624610970bcc0c9aa1d51e40109e755f81af447318",
   "jobs": {
     "resolve-dependencies": {
       "job": "resolve-dependencies",
@@ -12,8 +12,7 @@
       ],
       "workflow": "resolve-dependencies",
       "command": [
-        "bash",
-        ".ci/run-cached.sh"
+        "ccid:run-declared-checks"
       ],
       "runs_on": "linux",
       "events": [
@@ -30,8 +29,7 @@
       ],
       "workflow": "ci",
       "command": [
-        "bash",
-        ".ci/run-cached.sh"
+        "ccid:run-declared-checks"
       ],
       "runs_on": "linux",
       "events": [

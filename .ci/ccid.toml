@@ -5,7 +5,12 @@ repository = "https://git.corbet.ch/corbet-libre/cblv.git"
 [checks.verify]
 cache = false
 kind = "commands"
-commands = [["bash", ".ci/verify.sh"]]
+commands = [
+  ["cargo", "fmt", "--all", "--check"],
+  ["cargo", "clippy", "--locked", "--all-features", "--all-targets", "--", "-D", "warnings"],
+  ["cargo", "test", "--locked", "--all-features"],
+  ["bash", "-c", "set -euo pipefail\nRUSTFLAGS='--cfg getrandom_backend=\"wasm_js\"' cargo check --locked --no-default-features --features client,browser --target wasm32-unknown-unknown --lib"],
+]
 cache_tools = [["rustc", "-vV"], ["cargo", "--version"]]
 
 [checks.advisories]
@@ -25,7 +30,7 @@ scheduler = "forgejo"
 runs_on = "linux"
 checks = ["verify", "advisories"]
 workflow = "ci"
-command = ["bash", ".ci/run-cached.sh"]
+command = ["ccid:run-declared-checks"]
 events = ["manual"]
 
 [jobs.resolve-dependencies]
@@ -33,10 +38,16 @@ scheduler = "forgejo"
 runs_on = "linux"
 checks = ["resolve-dependencies"]
 workflow = "resolve-dependencies"
-command = ["bash", ".ci/run-cached.sh"]
+command = ["ccid:run-declared-checks"]
 events = ["manual"]
 
 [check_shell]
 
 [security]
 dependencies = "cargo-deny"
+
+[runtime]
+tools = ["nodejs", "python3", "cargo-deny", "wasm-pack", "clang", "chromedriver", "chromium", "pkg-config", "openssl.dev", "openssl.out"]
+
+[toolchain]
+targets = ["stable:wasm32-unknown-unknown"]
